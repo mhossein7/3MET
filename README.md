@@ -1,9 +1,6 @@
 # 3MET / TMET
 
-Mother Machine Microscopy Experiments Tools.
-
-The GitHub repository is named `3MET`, while the Python package and command are
-named `TMET` because Python import packages cannot start with a digit.
+3(T)MET: Mother Machine Microscopy Experiments Tools.
 
 ## Tools
 
