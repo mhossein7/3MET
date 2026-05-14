@@ -68,18 +68,18 @@ def create_roi_microscopy_movies(root_folder, n_series = 30,t_buffer=50,l_buffer
             coordinates[i][j] = [min(roi_data[i][j][0]['ytl'],roi_data[i][j][-1]['ytl']),max(roi_data[i][j][0]['ybr'],roi_data[i][j][-1]['ybr'])]
             
     if input_labeling:
-        group_config_path = root / 'group_config.json'
-        if not group_config_path.exists():
-            print(f'Error: {group_config_path} not found.')
+        cells_stims_path = root / 'cells_stims.npy'
+        if not cells_stims_path.exists():
+            print(f'Error: {cells_stims_path} not found.')
             return
-        group_ids = get_group_data(root)
+        cell_stims = get_group_data(root)
         p = 0
-        grouped_groups = [[[]for _ in range(n_series)] for _ in range(n_channel)]
+        chamber_stims = [[[]for _ in range(n_series)] for _ in range(n_channel)]
 
         for i in range(n_channel):
             for j in range(n_series):
                 k = len(roi_data[i][j])
-                grouped_groups[i][j] = group_ids[p:p+k]
+                chamber_stims[i][j] = cell_stims[p:p+k]
                 p += k
             
     for idx, pos_dir in enumerate(pos_folders):
@@ -188,12 +188,13 @@ def create_roi_microscopy_movies(root_folder, n_series = 30,t_buffer=50,l_buffer
                         x_br = current_rois[k]['xbr']
                         y_tl = current_rois[k]['ytl']
                         x_center = int((x_tl+x_br)/2)
-                        text = 'GP1' if grouped_groups[current_channel][current_fov][k]=='group1' else 'GP2'
-                        #cv2.putText(display_img,str(text),(x_tl+2,max_y-40+2),font,font_scale,(0,0,0),thickness+1,cv2.LINE_AA)
-                        #cv2.putText(display_img,str(text),(x_tl,max_y-40),font,font_scale,(0,255,0) if text == 'GP1' else (0,0,255),thickness,cv2.LINE_AA)
                         circle_center = (x_center,max_y-40)
                         circle_radius=10
-                        circle_color = (0,255,0) if text=='GP1' else (0,0,255)
+                        stim_value = _stim_value_for_frame(
+                            chamber_stims[current_channel][current_fov][k],
+                            frame_num,
+                        )
+                        circle_color = (0,255,0) if stim_value == 1 else (0,0,255)
                         # Draw a black outline (thickness=2) so circle is visible on bright backgrounds
                         cv2.circle(display_img, circle_center, circle_radius + 2, (0, 0, 0), -1, cv2.LINE_AA)
                         # Draw the colored filled circle (thickness=-1 means filled)
@@ -216,31 +217,47 @@ def create_roi_microscopy_movies(root_folder, n_series = 30,t_buffer=50,l_buffer
                 
                          
 def get_group_data(root:Path):
-    stims = np.load(root / 'cells_stims.npy')
-    group_db = np.zeros(stims.shape[0])
-    group_db = group_db.astype(str)
-    with open(root / 'group_config.json', 'r') as f:
-        config = json.load(f)
-    
-    gp1_r_g = config['group1']['red_to_green']
-    gp1_g_r = config['group1']['green_to_red']
-    gp2_r_g = config['group2']['red_to_green']
-    gp2_g_r = config['group2']['green_to_red']
-    
-    
-    def transition_finder(stim_vec):
-        diffs = np.diff(stim_vec)
-        ind_r_g = np.array(np.where(diffs==1)) +1 
-        ind_g_r = np.array(np.where(diffs == -1)) +1 
-        if ind_g_r[0].size == 0: ind_g_r = ['NaN']
-        if ind_r_g[0].size == 0: ind_r_g = ['NaN']
-        return (np.array(ind_r_g))[0] , (np.array(ind_g_r))[0]
+    """
+    Return one stimulation sequence per cell/chamber.
 
-    for i in range(stims.shape[0]):
-        r_g , g_r = transition_finder(stims[i])
-        if np.all(r_g==gp1_r_g) and np.all(g_r==gp1_g_r): group_db[i] = 'group1'
-        elif np.all(r_g==gp2_r_g) and np.all(g_r==gp2_g_r): group_db[i] = 'group2'
-        else: group_db[i] = 'Ungrouped'
-    
-    return group_db
+    cells_stims.npy is treated as the source of truth. group_config.json is read
+    to validate compatibility with the OLP-style format:
+    {"Group 1": [1, 0, ...], "Group 2": [1, 1, ...]}.
+    """
+    stims = np.load(root / 'cells_stims.npy')
+    stims = np.asarray(stims)
+    if stims.ndim != 2:
+        raise ValueError(f"Expected cells_stims.npy to be 2D, got shape {stims.shape}.")
+
+    group_config_path = root / 'group_config.json'
+    if group_config_path.exists():
+        with open(group_config_path, 'r') as f:
+            config = json.load(f)
+        _validate_group_config_sequences(config, stims.shape[1])
+
+    return stims
+
+
+def _validate_group_config_sequences(config, n_timepoints):
+    if not isinstance(config, dict):
+        raise ValueError("group_config.json must contain a dictionary.")
+
+    for group_name, group_value in config.items():
+        arr = np.asarray(group_value)
+        if arr.ndim not in (1, 2):
+            raise ValueError(f"{group_name} has invalid stimulation shape {arr.shape}.")
+        if arr.shape[-1] != n_timepoints:
+            raise ValueError(
+                f"{group_name} has {arr.shape[-1]} stimulation timepoints, "
+                f"but cells_stims.npy has {n_timepoints}."
+            )
+
+
+def _stim_value_for_frame(stim_sequence, frame_num):
+    stim = np.asarray(stim_sequence).ravel()
+    if stim.size == 0:
+        return 0
+
+    idx = max(0, min(frame_num - 1, stim.size - 1))
+    return int(stim[idx])
     
