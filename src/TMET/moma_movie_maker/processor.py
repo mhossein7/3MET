@@ -202,7 +202,7 @@ def create_roi_microscopy_movies(root_folder, n_series = 30,t_buffer=50,l_buffer
                 
                 
                 
-                
+                #
                 
                 # Initialize VideoWriter on first frame
                 if video_writer is None:
