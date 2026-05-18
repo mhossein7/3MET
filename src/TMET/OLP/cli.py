@@ -1,12 +1,18 @@
 """Command-line interface for open-loop experiment processing."""
 
 import argparse
+from pathlib import Path
 
 from .processor import process_experiment
 
 
 def add_arguments(parser):
-    parser.add_argument("-a", "--address", required=True, help="Experiment root folder")
+    parser.add_argument(
+        "-a",
+        "--address",
+        default=None,
+        help="Experiment root folder. Defaults to the current working directory.",
+    )
     parser.add_argument(
         "--features",
         nargs="*",
@@ -73,6 +79,13 @@ def add_arguments(parser):
         help="Exclude selected values, e.g. --exclude channel 1,2 group 3,4.",
     )
     parser.add_argument(
+        "--merge",
+        nargs="+",
+        action="append",
+        metavar="MERGE",
+        help="Merge selected values for plotting, e.g. --merge channel 1,2 group 1,2.",
+    )
+    parser.add_argument(
         "--channel-labels",
         "--channel_labels",
         nargs="*",
@@ -103,8 +116,9 @@ def register_parser(subparsers):
 
 
 def run(args):
+    address = args.address or Path.cwd()
     process_experiment(
-        args.address,
+        address,
         features=_parse_features(args.features),
         plot_modes=args.plot_modes,
         plot_inputs=args.plot_inputs,
@@ -112,6 +126,7 @@ def run(args):
         features_address=args.features_address,
         include=_parse_filters(args.include),
         exclude=_parse_filters(args.exclude),
+        merge=_parse_filters(args.merge),
         channel_labels=_parse_labels(args.channel_labels),
         group_labels=_parse_labels(args.group_labels),
         fluorescence_label=args.fluorescence_label,

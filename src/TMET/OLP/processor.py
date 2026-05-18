@@ -20,6 +20,8 @@ FLUORESCENCE_ALIASES = ("fluorescence", "fluorescecne", "fluo")
 GROWTH_RATE_FEATURE = "growth_rate"
 GROWTH_RATE_ALIASES = ("growth_rate", "growth rate", "growth-rate", "growthrate")
 AREA_ALIASES = ("area",)
+PLOT_CHANNEL_COLUMN = "plot_channel"
+PLOT_GROUP_COLUMN = "plot_group"
 
 
 def process_experiment(
@@ -31,6 +33,7 @@ def process_experiment(
     features_address=None,
     include=None,
     exclude=None,
+    merge=None,
     channel_labels=None,
     group_labels=None,
     fluorescence_label="GFP",
@@ -60,6 +63,9 @@ def process_experiment(
     include, exclude : dict, optional
         Optional filters with 'channel' and/or 'group' keys. Filtered plots are
         saved under plots/custom.
+    merge : dict, optional
+        Optional channel/group merge spec. Matching channels and/or groups are
+        plotted as one user-defined channel/group.
     channel_labels, group_labels : dict or list, optional
         Optional display labels for plot legends and subplot titles.
     fluorescence_label : str
@@ -86,12 +92,15 @@ def process_experiment(
 
     df = _add_requested_derived_features(df, features)
     df = _filter_dataframe(df, include=include, exclude=exclude)
+    df = _prepare_plot_columns(df, merge=merge)
     requested_features = _resolve_requested_features(df, default_feature, features)
     if plot_modes is None:
         plot_modes = DEFAULT_PLOT_MODES
     normalized_modes = _normalize_plot_modes(plot_modes)
     plots_root = root / "plots"
-    if _has_filters(include) or _has_filters(exclude):
+    if _has_merge(merge):
+        plots_root = plots_root / "custom" / "merged" / _merge_plot_dir_name(merge)
+    elif _has_filters(include) or _has_filters(exclude):
         plots_root = plots_root / "custom" / _custom_plot_dir_name(df)
 
     for feature in requested_features:
@@ -182,7 +191,7 @@ def _plot_by_channel(
 ):
     subsets = [
         (_channel_display_label(channel, channel_labels), channel_df)
-        for channel, channel_df in df.groupby("channel", sort=True)
+        for channel, channel_df in df.groupby(_channel_column(df), sort=True)
     ]
     output_path = plots_root / "channel-based" / f"{_safe_name(feature)}.png"
     plot_feature_summary_grid(
@@ -233,11 +242,11 @@ def _plot_by_group(
 ):
     subsets = [
         (_group_display_label(group, group_labels), group_df)
-        for group, group_df in df.groupby("group", sort=True)
+        for group, group_df in df.groupby(_group_column(df), sort=True)
     ]
     group_stim_sequences = {
         _group_display_label(group, group_labels): _stim_for_group(group_config, group)
-        for group, _ in df.groupby("group", sort=True)
+        for group, _ in df.groupby(_group_column(df), sort=True)
     }
     stim_sequences = {}
     if plot_inputs:
@@ -300,17 +309,17 @@ def _plot_by_channel_and_group(
     interval_minutes=5,
     tick_hours=4,
 ):
-    for channel, channel_df in df.groupby("channel", sort=True):
+    for channel, channel_df in df.groupby(_channel_column(df), sort=True):
         subsets = [
             (_group_display_label(group, group_labels), group_df)
-            for group, group_df in channel_df.groupby("group", sort=True)
+            for group, group_df in channel_df.groupby(_group_column(df), sort=True)
         ]
         group_stim_sequences = {
             _group_display_label(group, group_labels): _stim_for_group(
                 group_config,
                 group,
             )
-            for group, _ in channel_df.groupby("group", sort=True)
+            for group, _ in channel_df.groupby(_group_column(df), sort=True)
         }
         stim_sequences = {}
         if plot_inputs:
@@ -435,6 +444,30 @@ def _filter_dataframe(df, include=None, exclude=None):
     return filtered
 
 
+def _prepare_plot_columns(df, merge=None):
+    df = df.copy()
+    df[PLOT_CHANNEL_COLUMN] = df["channel"].astype(object)
+    df[PLOT_GROUP_COLUMN] = df["group"].astype(object)
+
+    if not _has_merge(merge):
+        return df
+
+    channels = _merge_values(merge, "channel")
+    groups = _merge_values(merge, "group")
+
+    if channels:
+        normalized_channels = {_normalize_channel_value(value) for value in channels}
+        mask = df["channel"].apply(_normalize_channel_value).isin(normalized_channels)
+        df.loc[mask, PLOT_CHANNEL_COLUMN] = _merged_value("channels", channels)
+
+    if groups:
+        normalized_groups = {_normalize_group_value(value) for value in groups}
+        mask = df["group"].apply(_normalize_group_value).isin(normalized_groups)
+        df.loc[mask, PLOT_GROUP_COLUMN] = _merged_value("groups", groups)
+
+    return df
+
+
 def _apply_filter(df, filters, keep):
     filtered = df
     for field, values in filters.items():
@@ -461,6 +494,46 @@ def _has_filters(filters):
     return bool(filters and any(_as_list(values) for values in filters.values()))
 
 
+def _has_merge(merge):
+    return _has_filters(merge)
+
+
+def _merge_values(merge, field):
+    if not merge:
+        return []
+
+    matches = []
+    field_names = {field, f"{field}s"}
+    for key, values in merge.items():
+        normalized_key = str(key).strip().lower().replace("-", "_")
+        if normalized_key in field_names:
+            matches.extend(_as_list(values))
+    return matches
+
+
+def _merged_value(prefix, values):
+    return f"merged_{prefix}_{'_'.join(_safe_name(value) for value in values)}"
+
+
+def _merge_plot_dir_name(merge):
+    channels = _merge_values(merge, "channel")
+    groups = _merge_values(merge, "group")
+    parts = []
+    if channels:
+        parts.append(_merged_value("channels", channels))
+    if groups:
+        parts.append(_merged_value("groups", groups))
+    return "_".join(parts) if parts else "merged"
+
+
+def _channel_column(df):
+    return PLOT_CHANNEL_COLUMN if PLOT_CHANNEL_COLUMN in df.columns else "channel"
+
+
+def _group_column(df):
+    return PLOT_GROUP_COLUMN if PLOT_GROUP_COLUMN in df.columns else "group"
+
+
 def _normalize_channel_value(value):
     try:
         return int(value)
@@ -480,11 +553,11 @@ def _normalize_group_value(value):
 def _custom_plot_dir_name(df):
     channels = [
         _safe_name(value)
-        for value in sorted(df["channel"].unique(), key=lambda item: str(item))
+        for value in sorted(df[_channel_column(df)].unique(), key=lambda item: str(item))
     ]
     groups = [
         _safe_name(_normalize_group_value(value))
-        for value in sorted(df["group"].unique(), key=lambda item: str(item))
+        for value in sorted(df[_group_column(df)].unique(), key=lambda item: str(item))
     ]
 
     channel_part = "channels_" + "_".join(channels) if channels else "channels_none"
@@ -516,13 +589,31 @@ def _normalize_label_mapping(labels, kind):
 def _channel_display_label(channel, channel_labels=None):
     labels = channel_labels or {}
     normalized = _normalize_channel_value(channel)
-    return labels.get(normalized, f"Channel {channel}")
+    if normalized in labels:
+        return labels[normalized]
+    if _is_merged_value(channel, "channels"):
+        return _merged_display_label(channel, "channels")
+    return f"Channel {channel}"
 
 
 def _group_display_label(group, group_labels=None):
     labels = group_labels or {}
     normalized = _normalize_group_value(group)
-    return labels.get(normalized, str(group))
+    if normalized in labels:
+        return labels[normalized]
+    if _is_merged_value(group, "groups"):
+        return _merged_display_label(group, "groups")
+    return str(group)
+
+
+def _is_merged_value(value, prefix):
+    return str(value).startswith(f"merged_{prefix}_")
+
+
+def _merged_display_label(value, prefix):
+    text = str(value).split(f"merged_{prefix}_", 1)[1]
+    label_prefix = "Merged channels" if prefix == "channels" else "Merged groups"
+    return f"{label_prefix} {text.replace('_', ',')}"
 
 
 def _find_feature_columns(df, feature):
