@@ -592,6 +592,14 @@ def _channel_display_label(channel, channel_labels=None):
     if normalized in labels:
         return labels[normalized]
     if _is_merged_value(channel, "channels"):
+        merged_label = _label_for_merged_members(
+            channel,
+            "channels",
+            labels,
+            _normalize_channel_value,
+        )
+        if merged_label is not None:
+            return merged_label
         return _merged_display_label(channel, "channels")
     return f"Channel {channel}"
 
@@ -602,6 +610,14 @@ def _group_display_label(group, group_labels=None):
     if normalized in labels:
         return labels[normalized]
     if _is_merged_value(group, "groups"):
+        merged_label = _label_for_merged_members(
+            group,
+            "groups",
+            labels,
+            _normalize_group_value,
+        )
+        if merged_label is not None:
+            return merged_label
         return _merged_display_label(group, "groups")
     return str(group)
 
@@ -614,6 +630,19 @@ def _merged_display_label(value, prefix):
     text = str(value).split(f"merged_{prefix}_", 1)[1]
     label_prefix = "Merged channels" if prefix == "channels" else "Merged groups"
     return f"{label_prefix} {text.replace('_', ',')}"
+
+
+def _label_for_merged_members(value, prefix, labels, normalizer):
+    for member in _merged_members(value, prefix):
+        normalized = normalizer(member)
+        if normalized in labels:
+            return labels[normalized]
+    return None
+
+
+def _merged_members(value, prefix):
+    text = str(value).split(f"merged_{prefix}_", 1)[1]
+    return [member for member in text.split("_") if member]
 
 
 def _find_feature_columns(df, feature):
